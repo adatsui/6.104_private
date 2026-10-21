@@ -1,0 +1,78 @@
+# P2 Design Notes
+
+## How the Plan Changed
+
+The plan held in its steps, but not in its order. First, sync-engine checks that every concept instance listed in `design/types.md` is registered, so I implemented all six concepts and their tests before any reactions, rather than adding one concept per step. Second, the backend was finished and checked as a whole before the frontend, rather than adding a page at each step, because the composition could be checked end to end without a browser. Thus, steps 3 to 8 became two passes: the backend for every step, then the frontend for every step.
+
+Additionally, the check for each step became a runnable script instead of a manual check in the browser. `bun run journey` drives the whole user journey from an empty database through the same endpoints the frontend calls, and checks each outcome, including the refusals. The browser was then used for what the script cannot check: that the page updates without a refresh and that errors are readable.
+
+## Design Changes
+
+### Concepts
+
+**Comments are not placed in the chart.** In P1, comments were placed in the same cell as their post, so they would have appeared as separate ideas in the chart and in the export. Now only top-level posts are placed, and a comment belongs to the cell of its post through `commentOn`. As a result, comments are one level deep, and only top-level posts can be upvoted, since the progress check finds a post's chapter through its place in the chart.
+
+**Checks are actions, not queries.** In sync-engine, if a reaction's condition fails and nothing else answers the request, the request does not fail but waits until it times out. Thus, `_isMember`, `_rowIndex`, and `_itemIndex` became the actions `checkMember`, `checkRow`, and `checkItem` in Charting, and Progressing gained `checkReached`. Each one either returns or refuses with a code and a message, such as `NOT_MEMBER` or `NOT_REACHED`, so a failed check answers the request with an informative error.
+
+**Progress is set by chapter, not by number.** In P1, a user set their progress to a number, which was checked against `_rowCount`. Now a user chooses a chapter, and `checkRow` turns it into its position, so progress can never point past the last chapter. Progress is still one position in the book: choosing a later chapter opens every chapter up to it, and choosing an earlier chapter hides the later ones again.
+
+**`_filter` became `_items`.** sync-engine signatures cannot take lists, so `_filter(chart, rows?, columns?)` became `_items(chart)`, which returns every placed item with its row's position, in chapter order. The filtering moved to the front end, on data that is already limited to the rows the user has read, so filtering can never reveal an unread chapter. For the same reason, the row labels in `createChart` use an `opaque Labels` type instead of `seq String`.
+
+**Smaller changes.** Charting refuses duplicate row labels (`DUPLICATE_ROW`) as well as duplicate column labels (`DUPLICATE_COLUMN`). Posting keeps `_thread`, and refuses a comment, edit, or deletion of a post that does not exist (`POST_NOT_FOUND`). `Boolean` became `Flag`, sync-engine's name for it, and the `created DateTime` of a post was dropped, since the posts are now a sequence. The principles were rewritten in general terms, without any book, so that the concepts stay reusable.
+
+### Reactions
+
+**Setting up a chart.** The journey starts from an empty database, so I added reactions for creating a chart, adding a member by username, listing a user's charts, and adding a literary element. Adding a member has two reactions on one endpoint: one adds a registered username, and the other refuses an unregistered one with `UNKNOWN_USER`.
+
+**Editing, deleting, and unvoting.** I added reactions for editing an idea, deleting an idea, deleting a comment, and removing an upvote, matching the actions that the concepts already had.
+
+**Unread chapters are sent only by position.** The chart view sends the title and ideas of every chapter the member has read, but only the position of every chapter they have not read. The front end shows an unread chapter as "Chapter 4," so the progress menu can still offer it, without its title, which could itself be a spoiler (for example, a chapter called "The Death of Samuel").
+
+**One view and three formers.** The view `RowReached` holds when a row's position is at most the member's progress, and the chart view uses it to leave out every idea in an unread chapter. The formers are the chart list, the chart view, and the card for each idea, which joins its content, upvote count, whether the member has upvoted it, and its comments.
+
+## Key Decisions
+
+**Sessions are cookies.** The session is kept in a cookie that the browser sends on its own, so the front end never stores or handles it.
+
+**The teacher has no special view.** The owner of a chart marks their progress like every other member, so the chart works the same way for everyone.
+
+**Ideas, chapters, and literary elements.** The interface calls posts "ideas," rows "chapters," and columns "literary elements," and labels progress "I have read," matching the language of P1.
+
+**Error messages give a direction first.** Each message says what to do, then why, without contractions, such as "Choose a different username. That username is already taken." The browser only receives a category of error, such as `FORBIDDEN`, so each form words its own messages, and the forms check the quote, citation, and duplicate rules before sending.
+
+**Other members' ideas appear on Refresh.** A user's own actions update the page immediately, without a reload. Ideas from other members appear when the user clicks Refresh.
+
+**Exports open the print dialog.** Exporting opens a page with the chosen literary elements and chapters, in chapter order, and opens the browser's print dialog, where the user can save it as a PDF. Each idea includes its literary element, quote, citation, analysis, and comments.
+
+## Testing
+
+**Concept tests.** Each concept has a test suite, with 43 tests in total, each running against its own empty database. Each suite tests the concept's principle as one scenario, every refusal, and the cases that are easy to get wrong, such as deleting a post with replies to its comments, moving progress backward, and an account still existing after the concept is rebuilt.
+
+**Journey script.** `bun run journey` runs the whole core user journey from an empty database, through the same endpoints as the front end, and checks 34 outcomes. Because it receives the exact refusal codes, it also checks access control: a non-member cannot view or post, a member cannot post in or upvote an unread chapter, a signed-out session no longer works, and unread chapters arrive without their titles.
+
+**Manual checklist.** `threadtracker/manual-tests.md` lists what only the browser can show, such as updates without a refresh, the wording of each error, and data surviving a restart. I did not run every check, but I ran the core user journey in the browser, and the demo shows signing in, creating a chart, adding members, posting, hidden chapters, and commenting as a second member.
+
+## Challenges
+
+**The specification format is strict.** sync-engine expects six sections in a fixed order, one block in each, and single-word types, so converting the P1 specifications took several rounds of `bun run check:design`.
+
+**The code and the specification have to match exactly.** At one point, the code was written against an older version of my specifications, and sync-engine refused it one mismatch at a time: an action the specification did not declare, a refusal the code did not raise, a query the code did not implement. Each time, I changed the code to match the specification, rather than the other way around, since the specification is the source of truth.
+
+**Small framework rules had large effects.** TypeScript `private` methods count as actions, since they are public at runtime, so the helpers had to become JavaScript `#private` methods. An idea with only an analysis disappeared from the chart view, because a missing optional field made the whole idea drop out, so absent fields are now returned as `null`. Optional inputs, such as a quote, needed default values before sync-engine would accept them.
+
+**Setting up the tools.** MongoDB would not start while an older container held its port, and the app could not connect until the missing `.env` file was created. The front end also needed two adjustments before Vite could bundle sync-engine's client for the browser.
+
+## Interesting Moments
+
+**Following the specification found a spoiler.** My specification says that the chart view includes only the rows the member has read, but the first version of the code sent the title of every chapter for the progress menu, so a chapter's title could spoil what happens in it. Following the specification exactly then raised a second problem: if unread chapters were not sent at all, Millie could not choose one to move her progress forward. Sending unread chapters only by position solved both, and it is why the chart shows unread chapters as "Chapter 4" and "Chapter 5."
+
+**Order matters in a reaction.** When an idea is posted, Posting creates the idea before Charting places it in its cell. If the cell's literary element is not in the chart, the idea is created but never placed, so it exists but cannot be seen or deleted. Checking everything before changing anything prevents this, so every reaction runs its checks before its first change. For posting, a check of the literary element would have needed a new action, so for the MVP I kept the specification as it was and listed the check under P3.
+
+## Remaining for P3
+
+- **Comments.** Upvoting comments, and replying to comments, which are both left out since comments are not placed in the chart.
+- **Members.** A list of a chart's members, which needs a new `_members` query, as well as removing members, leaving a chart, and deleting a chart.
+- **Live updates.** Showing other members' ideas without clicking Refresh.
+- **Checking the literary element.** An idea posted to a literary element outside the chart is refused, but only after the idea is created, so the idea is left unplaced. The interface never sends such a request, but the endpoint should check the literary element before creating the idea.
+- **Error messages.** More specific messages where one category of error covers two cases, such as `FORBIDDEN` for both not being a member and not having read a chapter.
+- **The rest of the manual checklist,** and styling, including the layout of the exported PDF.
