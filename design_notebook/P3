@@ -1,0 +1,72 @@
+# P3 Design Notebook
+
+For P3, I completed the app, deployed it at https://threadtracker.mit-sdg.dev, extended the concept tests, and restyled the interface. Each entry below explains a problem, what I changed, and why, with a *Check:* for how I confirmed it.
+
+## 1. Responding to P2 Feedback
+
+1. **The script in `bun test`.** `bun test` runs only the six concept test suites in `tests/concepts/`. The journey is a separate script, `bun run journey`, and the README now says so. *Check:* the output of `bun test` lists only those six files.
+2. **The README.** It now links P1, P2, and P3, and explains how to run the app and the tests.
+3. **Cleanup.** I removed `design.zip`, ignored `*.zip`, fixed the duplicated "the demo is" in p2.md, and filled in `.env.example`, which was empty.
+
+## 2. Deleting a Post Left Its Upvotes Behind
+
+**Problem.** The grader suggested moving cross-concept steps, such as cleaning up after a deleted post, into reactions (rules that run an action in one concept when an action happens in another). While moving them, I found a bug. Say a classmate posts the idea about Adam's name etymology, Millie upvotes it, and the classmate deletes it. The `DeletePost` endpoint deleted the post in Posting and removed it from its cell in Charting, but nothing removed Millie's upvote, so Upvoting kept a vote for a post that no longer existed.
+
+**Change.** I added `Upvoting.clear(item)`, a `Charting._placement(item)` query, and two reactions that run whenever a post is deleted:
+
+```
+Posting.delete(post)
+  ├─ DeletedPostLosesUpvotes → Upvoting.clear(post)
+  └─ DeletedPostLeavesChart  → Charting.deleteItem(post, chart),
+                               if Charting._placement(post) finds its chart
+```
+
+The endpoint now only checks access and calls `Posting.delete`.
+
+**Why.** The cleanup happens however a post is deleted, and the endpoint no longer needs to know which concepts hold state about posts. Comments are never placed in a chart, so `DeletedPostLeavesChart` skips them without a special case.
+
+*Check:* the journey script deletes an upvoted post and confirms that it is gone from its cell and that its upvotes are cleared, so the bug would show up again there. `Upvoting.test.ts` confirms that `clear` removes every upvote on one item and no others.
+
+## 3. Checking Agent-Suggested Changes
+
+I used an LLM for parts of this milestone and checked each change before building on it.
+1. **A spec format error.** `bun run check` rejected the first spec for `clear`, because every action needs a `where` line. The fix was `where true`.
+2. **A suggestion that didn't work.** The LLM suggested making `DeletePost` wait for the cleanup reactions before responding, using `.afterFlowSettles()`. That failed with binding errors, because it splits the endpoint into separate reactions. I removed it, since the front end reloads the chart after a delete anyway.
+3. **Tests and mockups.** I ran `bun test` and `bun run journey` after each change, and I reviewed the restyle as screenshots before applying it.
+
+## 4. Deploying
+
+**Problem.** The platform runs the `build` and `start` scripts from a `package.json` at the root of the repo, but my app lived in `threadtracker/`. In production, there is also no Vite dev server, so nothing served the front end.
+
+**Change.** I moved the app to the root of the repo, added a `build` script, and made the back end serve the built front end from `web/dist`. Any unknown path gets `index.html`, so a page like `/charts/<id>` still works on reload. On the platform, I set `MONGODB_URL` (the platform's default name is `MONGODB_URI`) and `PUBLIC_ORIGIN`.
+
+**Why.** The front end and the API share one origin, so the session cookie works without any cross-origin setup.
+
+*Check:* `bun run preview` ran the production build locally, and `/health` returned `ok` on the live site.
+
+## 5. Concept Tests
+
+**Problem.** Several tests checked that a refused action reported the right error, but not that it changed nothing.
+
+**Change.** Each of those tests now also checks the state afterward: a refused member or literary element is not added, a refused edit leaves the post as it was, refused negative progress keeps the earlier progress, and a refused registration keeps the original password.
+
+*Check:* all 45 tests pass, and the saved output is in `test-output.txt`. One limit remains: a refused `Posting.create` can't be checked this way, because Posting has no query that lists every post.
+
+## 6. Visual Design
+
+I wanted the app to feel like reading a book, not like using a dashboard.
+1. **Fonts.** Source Serif 4 is the book's voice: headings, chapter labels, book titles, and quotes. Source Sans 3 is the students' voice: analysis, comments, buttons, and forms.
+2. **Color.** Each accent marks one part of the app, so color says whose something is. Blue is the chart and posting, orange is responding to classmates (upvotes and comments), and green is my own reading (the progress dropdowns, the edges of read chapters, and the cell panel).
+3. **Unread chapters.** They are plain gray, outside the color scheme, so they look switched off.
+4. **Iterating.** I compared screenshots before changing any code. The first cream was too warm and the accents were too dull, so I tried three palettes and settled between the first two, with a darker "library lamp" green. I also limited orange to upvotes and comments, made the quote box wrap like the analysis box, and put each comment's author under the comment, as with posts.
+5. **Accessibility.** All text meets the WCAG AA contrast ratio of 4.5:1, except the faded "Chapter N" placeholders for unread chapters. The bright orange is too light for text, so orange text uses a darker shade.
+
+## 7. Testing the User Journeys
+
+I ran every check in `manual-tests.md` on the live site, not locally. The live database already had data, so I used new accounts (`teacher2`, `millie2`, `classmate2`, and `outsider2`) and a new chart.
+
+All 46 checks passed. These include the error cases, such as a taken username, an empty idea, a quote without a citation, and a duplicate chapter or literary element. They also include the access checks: a non-member sees only "Ask the owner of this chart to add you," and the server refuses a non-member's direct API request with `FORBIDDEN`.
+
+**Limits and future work.**
+1. **Live updates.** Other members' new ideas appear after clicking Refresh, not on their own.
+2. **Members.** A chart doesn't show who its members are; members only see the owner's name, on My Charts and Chart Settings. Showing the members needs a new `Charting` query, so I'm leaving it for P4.
