@@ -1,0 +1,1 @@
+{"class":{"code":"6.1040","title":"Software Design","term":"Fall 2026","timezone":"America/New_York","status":"ACTIVE"}}
